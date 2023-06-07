@@ -271,25 +271,24 @@ class StockMove(models.Model):
                             ml_vals.update({
                                 'lot_id': existing_lot.id,
                                 'location_id': quant.location_id.id or move.location_id.id,
-                                'owner_id': quant.owner_id.id or False,
+                                'owner_id': quant.owner_id.id or False
                             })
                         else:
                             ml_vals.update({'lot_name': lot.lot_name})
                         move_lines_to_create.append(ml_vals)
                         mls_qties.append(qty)
                         sum_of_lots += qty
-                    if abs(line.qty) != sum_of_lots:
+                    if abs(line.qty) != sum_of_lots and line.product_id.tracking == 'none':
                         difference_qty = abs(line.qty) - sum_of_lots
                         ml_vals = move._prepare_move_line_vals()
-                        if line.product_id.tracking == 'serial':
-                            move_lines_to_create.extend([ml_vals for i in range(int(difference_qty))])
-                            mls_qties.extend([1]*int(difference_qty))
-                        else:
-                            move_lines_to_create.append(ml_vals)
-                            mls_qties.append(difference_qty)
+                        move_lines_to_create.append(ml_vals)
+                        mls_qties.append(difference_qty)
             move_lines = self.env['stock.move.line'].create(move_lines_to_create)
             for move_line, qty in zip(move_lines, mls_qties):
                 move_line.write({qty_fname: qty})
+            if are_qties_done:
+                moves_remaining._complete_done_qties(set_quantity_done_on_move=True)
+
         else:
             for move in moves_remaining:
                 for line in lines_data[move.product_id.id]['order_lines']:
