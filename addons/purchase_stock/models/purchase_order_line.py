@@ -245,8 +245,15 @@ class PurchaseOrderLine(models.Model):
             qty_to_push = self.product_qty - qty
         else:
             move_dests_initial_demand = self._get_move_dests_initial_demand(move_dests)
-            qty_to_attach = move_dests_initial_demand - qty
-            qty_to_push = self.product_qty - move_dests_initial_demand
+            # Compare the order qty against the maximum between the existing
+            # procurement and the chained downstream demand. Without the
+            # ``max`` the residual ignores pending IN moves that have no
+            # chained downstream move yet (e.g. an open backorder), so a
+            # quantity decrease ends up *increasing* the pending move
+            # because qty_to_push is computed only against the chained
+            # demand instead of the full procurement.
+            qty_to_attach = max(0.0, move_dests_initial_demand - qty)
+            qty_to_push = self.product_qty - max(qty, move_dests_initial_demand)
 
         if float_compare(qty_to_attach, 0.0, precision_rounding=self.product_uom.rounding) > 0:
             product_uom_qty, product_uom = self.product_uom._adjust_uom_quantities(qty_to_attach, self.product_id.uom_id)

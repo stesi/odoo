@@ -848,3 +848,68 @@ class TestCreatePicking(common.TestProductCommon):
         # Exchange: receipt for 1 item
         self.assertEqual(po.picking_ids[2].picking_type_id, picking_type_in)
         self.assertEqual(po.picking_ids[2].move_ids.quantity, 1)
+
+    def test_decrease_qty_two_steps_after_partial_receipt(self):
+        """ In a two-steps reception, after a partial receipt has been
+        validated, decreasing the ordered quantity on the purchase order
+        line must reduce the pending IN move (backorder) instead of
+        increasing it. Without the fix, ``qty_to_push`` is computed only
+        against the chained INT demand of the already-received quantity
+        and ignores the pending IN backorder, so it ends up positive and
+        is merged into the backorder, raising its qty above the new
+        ordered quantity.
+        """
+        warehouse = self.env['stock.warehouse'].search([
+            ('company_id', '=', self.env.company.id),
+        ], limit=1)
+        warehouse.reception_steps = 'two_steps'
+        product = self.env['product.product'].create({
+            'name': 'Two Steps Product',
+            'type': 'consu',
+            'is_storable': True,
+        })
+        po = self.env['purchase.order'].create({
+            'partner_id': self.partner_id.id,
+            'order_line': [(0, 0, {
+                'product_id': product.id,
+                'product_qty': 10.0,
+                'price_unit': 10.0,
+                'name': product.name,
+            })],
+        })
+        po.button_confirm()
+
+        receipt = po.picking_ids.filtered(
+            lambda p: p.location_id.usage == 'supplier'
+        )
+        receipt.move_ids.move_line_ids.unlink()
+        self.env['stock.move.line'].create({
+            'move_id': receipt.move_ids.id,
+            'product_id': product.id,
+            'product_uom_id': product.uom_id.id,
+            'quantity': 5.0,
+            'location_id': receipt.move_ids.location_id.id,
+            'location_dest_id': receipt.move_ids.location_dest_id.id,
+            'picking_id': receipt.id,
+        })
+        action = receipt.button_validate()
+        if isinstance(action, dict) and action.get('res_model') == 'stock.backorder.confirmation':
+            self.env['stock.backorder.confirmation'].with_context(
+                **action.get('context', {})
+            ).create({}).process()
+
+        backorder = po.picking_ids.filtered(
+            lambda p: p.location_id.usage == 'supplier' and p.state != 'done'
+        )
+
+        po.order_line.product_qty = 7.0
+
+        self.assertEqual(backorder.move_ids.product_uom_qty, 2.0,
+            "The backorder IN move should be decreased from 5 to 2.")
+        self.assertEqual(po.order_line.qty_received, 5.0)
+        self.assertEqual(po.order_line.product_qty, 7.0)
+        # Total IN demand must equal the new ordered qty.
+        in_moves = po.order_line.move_ids.filtered(
+            lambda m: m.state != 'cancel' and m.location_id.usage == 'supplier'
+        )
+        self.assertEqual(sum(in_moves.mapped('product_uom_qty')), 7.0)
