@@ -6499,6 +6499,37 @@ class StockMove(TransactionCase):
         # check forecast_availability expressed in product base uom
         self.assertEqual(move.forecast_availability, 24)
 
+    def test_products_availability_with_cancelled_move(self):
+        """ Cancelling one line of a delivery must not mark the whole transfer
+        as unavailable: the cancelled move demands nothing.
+        """
+        product, spare = self.env['product.product'].create([{
+            'name': name,
+            'is_storable': True,
+            'categ_id': self.env.ref('product.product_category_all').id,
+        } for name in ('Shipped Product', 'Cancelled Product')])
+        self.env['stock.quant']._update_available_quantity(product, self.stock_location, 100.0)
+        self.env['stock.quant']._update_available_quantity(spare, self.stock_location, 100.0)
+        picking = self.env['stock.picking'].create({
+            'picking_type_id': self.env.ref('stock.picking_type_out').id,
+            'location_id': self.stock_location.id,
+            'location_dest_id': self.customer_location.id,
+            'move_ids': [Command.create({
+                'name': line_product.name,
+                'product_id': line_product.id,
+                'product_uom_qty': qty,
+                'location_id': self.stock_location.id,
+                'location_dest_id': self.customer_location.id,
+            }) for line_product, qty in ((product, 5.0), (spare, 7.0))],
+        })
+        picking.action_confirm()
+        self.assertEqual(picking.products_availability_state, 'available')
+
+        picking.move_ids.filtered(lambda move: move.product_id == spare)._action_cancel()
+        picking.invalidate_recordset(['products_availability', 'products_availability_state'])
+        self.assertEqual(picking.move_ids.mapped('state'), ['assigned', 'cancel'])
+        self.assertEqual(picking.products_availability_state, 'available')
+
     def test_SML_location_selection(self):
         """
         Suppose the setting 'Storage Categories' disabled.

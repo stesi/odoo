@@ -759,7 +759,10 @@ class Picking(models.Model):
         all_moves._fields['forecast_availability'].compute_value(all_moves)
         for picking in pickings:
             # In case of draft the behavior of forecast_availability is different : if forecast_availability < 0 then there is a issue else not.
-            if any(float_compare(move.forecast_availability, 0 if move.state == 'draft' else move.product_qty, precision_rounding=move.product_id.uom_id.rounding) == -1 for move in picking.move_ids):
+            # A done or cancelled move keeps forecast_availability at 0.0, since
+            # _compute_forecast_information never assigns one, so comparing it
+            # with its product_qty would report a shortage that nobody awaits.
+            if any(float_compare(move.forecast_availability, 0 if move.state == 'draft' else move.product_qty, precision_rounding=move.product_id.uom_id.rounding) == -1 for move in picking.move_ids if move.state not in ('done', 'cancel')):
                 picking.products_availability = _('Not Available')
                 picking.products_availability_state = 'late'
             else:
